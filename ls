@@ -190,6 +190,7 @@ function Library:AddWindow(title, config)
                 item.MouseButton1Click:Connect(function() choose(option) end)
             end
             head.MouseButton1Click:Connect(function() expanded = not expanded; collapse() end)
+            lay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() if expanded then collapse() end end)
             return {Set = choose, Get = function() return selected end}
         end
         function tab:AddTextbox(text, placeholder, callback)
@@ -200,6 +201,78 @@ function Library:AddWindow(title, config)
             input.FocusLost:Connect(function(enter) if callback then task.spawn(callback, input.Text, enter) end end)
             return input
         end
+        function tab:AddKeybind(text, defaultKey, callback)
+            local row = button(page, "", 32)
+            local caption = label(row, text)
+            caption.Position = UDim2.fromOffset(10, 4)
+            caption.Size = UDim2.new(1, -115, 0, 24)
+            local key = typeof(defaultKey) == "EnumItem" and defaultKey or Enum.KeyCode.RightShift
+            local keyButton = button(row, key.Name, 26)
+            keyButton.Position = UDim2.new(1, -104, 0, 3)
+            keyButton.Size = UDim2.fromOffset(98, 26)
+            local binding = false
+            keyButton.MouseButton1Click:Connect(function()
+                binding = true
+                keyButton.Text = "Presiona tecla..."
+            end)
+            UIS.InputBegan:Connect(function(input, processed)
+                if not row.Parent then return end
+                if binding then
+                    if input.UserInputType == Enum.UserInputType.Keyboard then
+                        key = input.KeyCode
+                        keyButton.Text = key.Name
+                        binding = false
+                    end
+                elseif not processed and input.KeyCode == key then
+                    if callback then task.spawn(callback) end
+                end
+            end)
+            return {Get = function() return key end, Set = function(_, newKey) key = newKey; keyButton.Text = key.Name end}
+        end
+        function tab:AddColorPicker(text, initial, callback)
+            local color = typeof(initial) == "Color3" and initial or Library.Theme.Accent
+            local holder = round(make("Frame", {Size = UDim2.new(1, 0, 0, 60), BackgroundColor3 = Library.Theme.Panel}, page), 5)
+            local titleLabel = label(holder, text)
+            titleLabel.Position = UDim2.fromOffset(10, 2)
+            local sample = round(make("Frame", {Position = UDim2.new(1, -43, 0, 6), Size = UDim2.fromOffset(33, 18), BackgroundColor3 = color}, holder), 4)
+            local r, g, b = math.floor(color.R * 255), math.floor(color.G * 255), math.floor(color.B * 255)
+            local input = round(make("TextBox", {Position = UDim2.fromOffset(9, 30), Size = UDim2.new(1, -18, 0, 24), BackgroundColor3 = Library.Theme.Dark, TextColor3 = Library.Theme.Text, Text = string.format("#%02X%02X%02X", r, g, b), PlaceholderText = "#RRGGBB", ClearTextOnFocus = false, TextSize = 14, Font = Enum.Font.Gotham}, holder), 4)
+            local function set(v)
+                if typeof(v) == "Color3" then color = v
+                elseif type(v) == "string" then
+                    local hex = v:gsub("#", "")
+                    if #hex ~= 6 or not hex:match("^%x+$") then return end
+                    color = Color3.fromRGB(tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16))
+                else return end
+                sample.BackgroundColor3 = color
+                input.Text = string.format("#%02X%02X%02X", math.floor(color.R*255+.5), math.floor(color.G*255+.5), math.floor(color.B*255+.5))
+                if callback then task.spawn(callback, color) end
+            end
+            input.FocusLost:Connect(function() set(input.Text) end)
+            return {Set = set, Get = function() return color end}
+        end
+        function tab:AddConsole(text)
+            local holder = round(make("Frame", {Size = UDim2.new(1, 0, 0, 175), BackgroundColor3 = Library.Theme.Panel}, page), 5)
+            local heading = label(holder, text or "Consola")
+            heading.Position = UDim2.fromOffset(8, 2)
+            local output = make("ScrollingFrame", {Position = UDim2.fromOffset(8, 28), Size = UDim2.new(1, -16, 1, -36), BackgroundColor3 = Library.Theme.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new()}, holder)
+            local lines = make("TextLabel", {Size = UDim2.new(1, -10, 0, 20), Position = UDim2.fromOffset(5, 3), BackgroundTransparency = 1, Text = "", TextColor3 = Library.Theme.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Font = Enum.Font.Code}, output)
+            local logs = {}
+            return {
+                Print = function(_, message)
+                    table.insert(logs, tostring(message))
+                    lines.Text = table.concat(logs, "\n")
+                    task.defer(function()
+                        local height = math.max(20, lines.TextBounds.Y + 8)
+                        lines.Size = UDim2.new(1, -10, 0, height)
+                        output.CanvasSize = UDim2.fromOffset(0, height + 8)
+                        output.CanvasPosition = Vector2.new(0, math.max(0, height - output.AbsoluteSize.Y))
+                    end)
+                end,
+                Clear = function() table.clear(logs); lines.Text = ""; output.CanvasSize = UDim2.new() end
+            }
+        end
+        tab.AddTextBox = tab.AddTextbox
         function tab:AddFolder(text)
             local folder = round(make("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Library.Theme.Panel, BackgroundTransparency = .1, ClipsDescendants = true}, page), 5)
             local head = button(folder, "▸ " .. text, 30)
@@ -211,7 +284,7 @@ function Library:AddWindow(title, config)
             lay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(update)
             head.MouseButton1Click:Connect(function() opened = not opened; head.Text = (opened and "▾ " or "▸ ") .. text; update() end)
             local folderTab = {}
-            for _, method in ipairs({"AddLabel", "AddButton", "AddSwitch", "AddSlider", "AddDropdown", "AddTextbox"}) do
+            for _, method in ipairs({"AddLabel", "AddButton", "AddSwitch", "AddSlider", "AddDropdown", "AddTextbox", "AddKeybind", "AddColorPicker", "AddConsole"}) do
                 folderTab[method] = function(_, ...)
                     -- Reutiliza los constructores de pestaña colocando temporalmente los elementos en la carpeta.
                     local before = {}
@@ -225,6 +298,7 @@ function Library:AddWindow(title, config)
                 end
             end
             folderTab.AddToggle = folderTab.AddSwitch
+            folderTab.AddTextBox = folderTab.AddTextbox
             return folderTab
         end
         return tab
